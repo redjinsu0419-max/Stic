@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30초 졸라맨 자동 전투</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #1a1a1a;
+            color: #fff;
+            font-family: sans-serif;
+            margin-top: 20px;
+        }
+        .controls {
+            margin-bottom: 20px;
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        canvas {
+            background-color: #f0f0f0;
+            border: 3px solid #444;
+            border-radius: 5px;
+        }
+        .status-board {
+            display: flex;
+            justify-content: space-between;
+            width: 600px;
+            margin-bottom: 10px;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .hp-bar-container {
+            width: 200px;
+            height: 20px;
+            background-color: #555;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .hp-bar {
+            height: 100%;
+            transition: width 0.2s;
+        }
+        #timer {
+            font-size: 28px;
+            color: #e74c3c;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:hover { background-color: #2980b9; }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <div>
+            <label>🔵 청코너 스타일:</label>
+            <select id="p1Style">
+                <select id="p1Style">
+                <option value="balanced">밸런스형 (무난함)</option>
+                <option value="aggressive">인파이터 (빠른 공격)</option>
+                <option value="defensive">아웃복서 (방어/회피)</option>
+            </select>
+        </div>
+        <div>
+            <label>🔴 홍코너 스타일:</label>
+            <select id="p2Style">
+                <option value="aggressive">인파이터 (빠른 공격)</option>
+                <option value="balanced">밸런스형 (무난함)</option>
+                <option value="defensive">아웃복서 (방어/회피)</option>
+            </select>
+        </div>
+        <button onclick="startGame()">전투 시작!</button>
+    </div>
+
+    <div class="status-board">
+        <div>
+            🔵 청코너 HP
+            <div class="hp-bar-container"><div id="hp1" class="hp-bar" style="background-color: #3498db; width: 100%;"></div></div>
+        </div>
+        <div id="timer">30.0</div>
+        <div style="text-align: right;">
+            홍코너 HP 🔴
+            <div class="hp-bar-container"><div id="hp2" class="hp-bar" style="background-color: #e74c3c; width: 100%; float: right;"></div></div>
+        </div>
+    </div>
+
+    <canvas id="fightCanvas" width="600" height="300"></canvas>
+
+    <script>
+        const canvas = document.getElementById("fightCanvas");
+        const ctx = canvas.getContext("2d");
+        let gameLoop, timerInterval;
+        let timeLeft = 30;
+        let isFighting = false;
+
+        // 파이터 설정
+        class Fighter {
+            constructor(x, color, direction, style) {
+                this.x = x;
+                this.y = 200; // 바닥 높이
+                this.color = color;
+                this.direction = direction; // 1: 오른쪽 봄, -1: 왼쪽 봄
+                this.hp = 100;
+                this.maxHp = 100;
+                this.action = "idle"; // idle, walk, punch, hit
+                this.actionTimer = 0;
+                
+                // 스타일에 따른 능력치 세팅
+                if (style === "aggressive") {
+                    this.speed = 3; this.power = 8; this.attackRange = 40; this.cooldown = 20;
+                } else if (style === "defensive") {
+                    this.speed = 1.5; this.power = 12; this.attackRange = 50; this.cooldown = 40;
+                } else {
+                    this.speed = 2; this.power = 10; this.attackRange = 45; this.cooldown = 30;
+                }
+            }
+
+            draw() {
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 4;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                ctx.beginPath();
+
+                // 머리
+                ctx.arc(this.x, this.y - 60, 12, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.beginPath();
+                // 몸통
+                ctx.moveTo(this.x, this.y - 48);
+                ctx.lineTo(this.x, this.y - 20);
+
+                // 팔 (액션에 따라 다름)
+                if (this.action === "punch") {
+                    ctx.moveTo(this.x, this.y - 40);
+                    ctx.lineTo(this.x + (30 * this.direction), this.y - 40); // 펀치 뻗음
+                } else if (this.action === "hit") {
+                    ctx.moveTo(this.x, this.y - 40);
+                    ctx.lineTo(this.x - (10 * this.direction), this.y - 50); // 맞아서 팔이 뒤로 감
+                } else {
+                    ctx.moveTo(this.x, this.y - 40);
+                    ctx.lineTo(this.x + (15 * this.direction), this.y - 25); // 기본 자세
+                }
+
+                // 다리 (액션에 따라 다름)
+                if (this.action === "walk" && Math.floor(Date.now() / 100) % 2 === 0) {
+                    ctx.moveTo(this.x, this.y - 20);
+                    ctx.lineTo(this.x - 10, this.y);
+                    ctx.moveTo(this.x, this.y - 20);
+                    ctx.lineTo(this.x + 10, this.y);
+                } else {
+                    ctx.moveTo(this.x, this.y - 20);
+                    ctx.lineTo(this.x - 5, this.y);
+                    ctx.moveTo(this.x, this.y - 20);
+                    ctx.lineTo(this.x + 5, this.y);
+                }
+                
+                ctx.stroke();
+            }
+
+            update(opponent) {
+                if (this.hp <= 0 || this.action === "hit") {
+                    if (this.actionTimer > 0) this.actionTimer--;
+                    else if (this.hp > 0) this.action = "idle";
+                    return;
+                }
+
+                if (this.action === "punch") {
+                    if (this.actionTimer > 0) this.actionTimer--;
+                    else this.action = "idle";
+                    return;
+                }
+
+                const dist = Math.abs(this.x - opponent.x);
+
+                // 상대방 쪽으로 이동
+                if (dist > this.attackRange) {
+                    this.action = "walk";
+                    this.x += this.speed * this.direction;
+                } 
+                // 공격 범위 안에 들어오면 공격
+                else if (Math.random() < 0.1) { // 공격 확률
+                    this.action = "punch";
+                    this.actionTimer = this.cooldown;
+                    
+                    // 데미지 계산 로직
+                    if (Math.random() > 0.2) { // 80% 명중률
+                        opponent.hp -= this.power;
+                        opponent.action = "hit";
+                        opponent.actionTimer = 10;
+                        opponent.x += 10 * this.direction; // 넉백
+                    }
+                } else {
+                    this.action = "idle";
+                }
+                
+                // 화면 밖으로 나가지 않게 고정
+                this.x = Math.max(20, Math.min(canvas.width - 20, this.x));
+            }
+        }
+
+        let p1, p2;
+
+        function startGame() {
+            const style1 = document.getElementById("p1Style").value;
+            const style2 = document.getElementById("p2Style").value;
+            
+            p1 = new Fighter(100, "#3498db", 1, style1);
+            p2 = new Fighter(500, "#e74c3c", -1, style2);
+            
+            timeLeft = 30;
+            isFighting = true;
+            document.getElementById("timer").innerText = timeLeft.toFixed(1);
+            document.getElementById("timer").style.color = "#e74c3c";
+            
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (timeLeft > 0 && isFighting) {
+                    timeLeft -= 0.1;
+                    document.getElementById("timer").innerText = timeLeft.toFixed(1);
+                }
+            }, 100);
+
+            if (gameLoop) cancelAnimationFrame(gameLoop);
+            updateGame();
+        }
+
+        function updateGame() {
+            if (!isFighting) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 바닥 선 그리기
+            ctx.strokeStyle = "#ccc";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 202);
+            ctx.lineTo(canvas.width, 202);
+            ctx.stroke();
+
+            // 파이터 로직 업데이트 및 그리기
+            p1.update(p2);
+            p2.update(p1);
+            
+            // 방향 서로 마주보게 보정
+            p1.direction = p1.x < p2.x ? 1 : -1;
+            p2.direction = p2.x < p1.x ? 1 : -1;
+
+            p1.draw();
+            p2.draw();
+
+            // HP 바 업데이트
+            document.getElementById("hp1").style.width = Math.max(0, p1.hp) + "%";
+            document.getElementById("hp2").style.width = Math.max(0, p2.hp) + "%";
+
+            // 승패 판정 로직
+            if (p1.hp <= 0 || p2.hp <= 0 || timeLeft <= 0) {
+                isFighting = false;
+                ctx.fillStyle = "rgba(0,0,0,0.7)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "white";
+                ctx.font = "30px sans-serif";
+                ctx.textAlign = "center";
+                
+                let resultText = "무승부!";
+                if (p1.hp > p2.hp) resultText = "청코너 승리!";
+                else if (p2.hp > p1.hp) resultText = "홍코너 승리!";
+                
+                ctx.fillText(resultText, canvas.width/2, canvas.height/2);
+            } else {
+                gameLoop = requestAnimationFrame(updateGame);
+            }
+        }
+    </script>
+</body>
+</html>
+
